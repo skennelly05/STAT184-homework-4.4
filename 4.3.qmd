@@ -1,0 +1,493 @@
+---
+title: "Reproducible Data Analysis: Airports, Monte Carlo, and GenAI Planning"
+author: "Sean Kennelly"
+date: "April 17, 2026"
+modified date: "April 22, 2026"
+
+format:
+  pdf:
+    toc: true
+    toc-depth: 2
+    number-sections: true
+    geometry: margin=1in
+    fontsize: 11pt
+---
+
+```{R}
+#| echo: false
+#| include: false
+# -----------------------
+# AIRPORT DATA
+# -----------------------
+library(tidyverse)
+library(rvest)
+library(ggplot2)
+
+url <- "https://en.wikipedia.org/wiki/List_of_busiest_airports_by_passenger_traffic"
+
+# More robust table selection: find the table by its caption
+page <- read_html(url)
+table_captions <- page |> html_elements("caption") |> html_text()
+busiest_table_index <- which(str_detect(table_captions, "(?i)busiest airports by passenger traffic"))[1]
+
+# Check if we found a table, else use a fallback (e.g., tables[[1]])
+if (is.na(busiest_table_index)) {
+  warning("Target table not found by caption. Using first table as fallback.")
+  airport_data <- html_table(page)[[1]]
+} else {
+  airport_data <- html_table(page)[[busiest_table_index]]
+}
+
+# Define airports of interest
+airports_of_interest <- c(
+  "Hartsfield–Jackson Atlanta International Airport", # Note: Using en-dash from Wikipedia
+  "Frankfurt Airport",
+  "Beijing Daxing International Airport",
+  "Dubai International Airport",
+  "Los Angeles International Airport",
+  "Heathrow Airport"
+)
+
+# Clean and process data using parse_number for safety
+airport_table <- airport_data |>
+  filter(`Airport` %in% airports_of_interest) |>
+  mutate(
+    # readr::parse_number expertly handles commas, spaces, and text
+    Passengers = parse_number(`Totalpassengers`)
+  ) |>
+  select(Airport, Country, Passengers) |>
+  arrange(desc(Passengers)) # Sort the table for the report
+
+# Prepare data for plotting
+airport_plot_data <- airport_table |>
+  mutate(Airport = fct_reorder(Airport, Passengers)) # Order bars by passenger count
+
+# Create the plot object
+airport_plot <- ggplot(airport_plot_data,
+       aes(x = Airport, y = Passengers, fill = Country)) +
+  geom_col() +
+  coord_flip() + # Flip coordinates for better readability of long airport names
+  labs(
+    title = "Busiest Airports by Passenger Traffic",
+    subtitle = "Comparison of selected global airports",
+    x = NULL, # Remove x-axis label as it's obvious
+    y = "Total Passengers (millions?)", # Suggest adding unit if known
+    fill = "Country"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+
+```
+
+# Busiest Airports Analysis
+
+## Summary Table
+
+The table below shows six major international airports ranked by total passenger traffic. Hartsfield-Jackson Atlanta International Airport appears as the busiest airport among the selected group, handling the largest number of passengers.
+
+Heathrow and Dubai International Airport also show very high traffic volumes, highlighting their importance as global travel hubs. European airports such as Heathrow and Frankfurt handle slightly fewer passengers but still play major roles in international travel.
+
+Beijing Daxing International Airport appears lower in the ranking, which may be due to its relatively recent opening compared to the others.
+
+```{r}
+airport_table
+```
+
+## Visualization
+
+The bar chart provides a visual comparison of passenger traffic across the six airports. Hartsfield-Jackson Atlanta stands out clearly with the highest passenger count.
+
+The use of color to represent country helps highlight geographic distribution. U.S. airports dominate the list, while Europe and Asia are also represented by key international hubs.
+
+Compared to the table, the plot makes it easier to quickly see differences in magnitude between airports.
+
+```{r}
+airport_plot
+```
+
+Alt Text: bar chart comparing passenger traffic at six major airports
+
+Long Description: Bar chart comparing total passengers across six major airports. Dubai is busiest, followed by the UK and US. The chart uses vertical bars for easy comparison across airports and highlights the difference in passenger traffic.
+
+------------------------------------------------------------------------
+
+# Monte Carlo
+
+```{R}
+#| echo: false
+# -----------------------
+# MONTE CARLO SIMULATION
+# -----------------------
+monte_carlo_sim <- function(n, x_min, x_max, y_min, y_max, func) {
+  
+  # generate random x and y values within bounds
+  x_vals <- runif(n, min = x_min, max = x_max)
+  y_vals <- runif(n, min = y_min, max = y_max)
+  
+  # evaluate function at x values
+  f_vals <- func(x_vals)
+  
+  # classify points
+  position <- ifelse(y_vals <= f_vals, "below_or_on", "above")
+  
+  # return data frame
+  data.frame(
+    x = x_vals,
+    y = y_vals,
+    f_x = f_vals,
+    position = position
+  )
+}
+
+set.seed(42) # Set seed for reproducibility
+
+mc_data <- monte_carlo_sim(
+  n = 1000,
+  x_min = 0,
+  x_max = 20,
+  y_min = 0,
+  y_max = 0.16,
+  func = function(x) dchisq(x, df = 3)
+)
+
+# Chi-square pdf function
+chisq_pdf <- function(x, df = 3) {
+  dchisq(x, df = df)
+}
+
+# wrangling and estimation
+mc_results <- mc_data |>
+  mutate(
+    below_curve = ifelse(y <= f_x, 1, 0)
+  )
+
+# proportion under curve
+p <- mean(mc_results$below_curve)
+
+# bounds 
+x_min <- min(mc_results$x)
+x_max <- max(mc_results$x)
+y_min <- min(mc_results$y)
+y_max <- max(mc_results$y)
+
+area_rect <- (x_max - x_min) * (y_max - y_min)
+
+# Monte Carlo estimate of integral
+integral_estimate <- p * area_rect
+
+library(ggplot2)
+
+mc_plot <- (ggplot(mc_results, aes(x = x, y = y)) +
+  geom_point(aes(color = factor(below_curve)), alpha = 0.5) +
+  stat_function(fun = chisq_pdf, color = "blue", linewidth = 1) +
+  labs(
+    title = "Monte Carlo Integration",
+    subtitle = paste("Estimated Integral =", round(integral_estimate, 4)),
+    x = "x",
+    y = "y",
+    color = "Below Curve"
+  ) +
+  theme_minimal()
+  )
+```
+
+## Monte Carlo Numerical Integration
+
+This section demonstrates how Monte Carlo simulation can be used to approximate the integral of a function. In this case, the function is the chi-square probability density function with 3 degrees of freedom.
+
+Random points are generated within a rectangular region, and the proportion of points that fall below the curve is used to estimate the area under the curve.
+
+## Results and Discussion
+
+As the number of sampled points increases, the Monte Carlo estimate becomes more accurate. With a sample size of 1,000 points, the estimate is already reasonably close to the true value.
+
+The visualization shows random points distributed above and below the curve. As sample size increases, the shape of the chi-square distribution becomes more apparent.
+
+This method demonstrates the trade-off between accuracy and computation: larger samples give better estimates but require more computation.
+
+Because randomness is involved, results may vary slightly, but reproducibility is ensured using a fixed seed (in code appendix).
+
+```{r}
+mc_plot
+```
+
+Alt Text: Monte Carlo chi-square integration with different sample sizes
+
+Long Description: This figure shows four visualizations in a 2x2 format of Monte Carlo integration for the Chi-square distribution using sample sizes of 10, 100, 1000, and 10000. Each plot displays random points inside a rectangle and a blue chi-square curve. Points are colored based on whether they fall above or below the curve. As sample size increases, the points fill the curve and the estimate becomes more accurate.
+
+------------------------------------------------------------------------
+
+# Planning and Prompting GenAI
+
+## Goals
+
+Our goals for this question is to tidy and wrangle the calcium dataset to be able to produce visiualization.
+
+## Needs
+
+Nouns: calcium dataset, columns, rows, control group, treatment group Verbs: reshape, group, import, pivot, convert
+
+## Step-by-Step
+
+1.  Import calcium.csv
+2.  Rename columns clearly if needed
+3.  Add subject ID column
+4.  Pivot longer so each row is: subject, group, time, calcium value
+5.  Convert time to ordered factor
+6.  display table
+
+## GenAI Prompt
+
+I used Microsoft copilot, and my prompt included the calcium.csv file and my goal, needs, and step-by-step plan.
+
+## GenAI Response
+
+Copilot:
+
+Here’s a clean, step‑by‑step way to do this in R with tidyverse.
+
+r library(tidyverse)
+
+1.  Import calcium.csv
+
+calcium_raw \<- read_csv("calcium.csv")
+
+calcium_raw Your file starts like:
+
+y0,y1,y2,y3,y0,y1,y2,y3 87.3,86.9,86.7,75.5,83.8,85.5,86.2,81.2
+
+2.  Rename columns clearly Assume first 4 columns = control, last 4 = treatment.
+
+r calcium \<- calcium_raw \|\> rename( y0_control = y0, y1_control = y1, y2_control = y2, y3_control = y3, y0_treat = y0_1, y1_treat = y1_1, y2_treat = y2_1, y3_treat = y3_1 ) If read_csv() auto-renamed duplicate names, they’ll be like y0, y1, y2, y3, y0_1, y1_1, etc.—adjust to match what you see in calcium_raw.
+
+3.  Add subject ID column r calcium \<- calcium \|\> mutate(subject = row_number())
+
+4.  Pivot longer to subject–group–time–value r calcium_long \<- calcium \|\> pivot_longer( cols = starts_with("y"), names_to = c("time", "group"), names_sep = "\_", values_to = "calcium" ) This uses names like y0_control → time = "y0", group = "control".
+
+5.  Convert time to ordered factor r calcium_long \<- calcium_long \|\> mutate( time = factor(time, levels = c("y0", "y1", "y2", "y3"), ordered = TRUE), group = factor(group, levels = c("control", "treat")) )
+
+6.  Display table r calcium_long \|\> arrange(subject, group, time) \|\> print(n = 20) You now have one row per subject–group–time–calcium, ready for visualization (e.g., ggplot(calcium_long, aes(time, calcium, color = group, group = interaction(subject, group))) + geom_line()).
+
+## Compare and Contrast
+
+The response followed the structure given in the prompt and stayed focused on the task. It clearly stated the goal and broke the work into steps. This is useful to having a better understanding of what the genai is telling us. It used pivot_longer() to reorganize the data. It also grouped by time, subject, and treatment group. This prepared the data for visualizations. A generic prompt would be less focussed. It would likely focus on basic cleaning and simple plotting. It would likely not consider how the dataset is structured. It would also miss the treatment vs control distinction. That would limit how useful the output is.
+
+---
+
+# Narrative
+
+## Self-Reflection
+Throughout this course, I have learned a lot about myself while working through these assignments. This course's emphasis on planning and presentation has helped me grow to see the whole process of our work and analysis. The goals, needs, and step-by-step process before writing our code for assignments really helps me write code easier and understand what to do. It breaks down the problem and makes the process of writing code especially for problems like the Monte Carlo problem much simpler. 
+
+Understanding the importance of the presentation is also beneficial when completing projects. This assignment has helped me put together a lot of skills I have learned throughout the semester. For example, from creating a tidy table using R, to then displaying the plots and graphs on a pdf, this assignment challenged my skills. 
+
+Formatting this pdf also helped me understand how important the layout of your work is before displaying. This helps keep our goals focused and our work understandable and reproducible. 
+
+---
+
+# Appendix A: GenAI Usage
+
+## Usage 1: Copilot planning
+
+## Tool:
+
+Microsoft Copilot
+
+## Date:
+
+4/14/2026
+
+## Prompt:
+
+Goals
+
+Our goals for this question is to tidy and wrangle the calcium dataset to be able to produce visiualization.
+
+Needs
+
+Nouns: calcium dataset, columns, rows, control group, treatment group Verbs: reshape, group, import, pivot, convert
+
+Step-by-Step
+
+1.  Import calcium.csv
+2.  Rename columns clearly if needed
+3.  Add subject ID column
+4.  Pivot longer so each row is: subject, group, time, calcium value
+5.  Convert time to ordered factor
+6.  display table
+
+calcium.csv
+
+## Response: Copilot:
+
+Here’s a clean, step‑by‑step way to do this in R with tidyverse.
+
+r library(tidyverse)
+
+1.  Import calcium.csv
+
+calcium_raw \<- read_csv("calcium.csv")
+
+calcium_raw Your file starts like:
+
+y0,y1,y2,y3,y0,y1,y2,y3 87.3,86.9,86.7,75.5,83.8,85.5,86.2,81.2
+
+2.  Rename columns clearly Assume first 4 columns = control, last 4 = treatment.
+
+r calcium \<- calcium_raw \|\> rename( y0_control = y0, y1_control = y1, y2_control = y2, y3_control = y3, y0_treat = y0_1, y1_treat = y1_1, y2_treat = y2_1, y3_treat = y3_1 ) If read_csv() auto-renamed duplicate names, they’ll be like y0, y1, y2, y3, y0_1, y1_1, etc.—adjust to match what you see in calcium_raw.
+
+3.  Add subject ID column r calcium \<- calcium \|\> mutate(subject = row_number())
+
+4.  Pivot longer to subject–group–time–value r calcium_long \<- calcium \|\> pivot_longer( cols = starts_with("y"), names_to = c("time", "group"), names_sep = "\_", values_to = "calcium" ) This uses names like y0_control → time = "y0", group = "control".
+
+5.  Convert time to ordered factor r calcium_long \<- calcium_long \|\> mutate( time = factor(time, levels = c("y0", "y1", "y2", "y3"), ordered = TRUE), group = factor(group, levels = c("control", "treat")) )
+
+6.  Display table r calcium_long \|\> arrange(subject, group, time) \|\> print(n = 20) You now have one row per subject–group–time–calcium, ready for visualization (e.g., ggplot(calcium_long, aes(time, calcium, color = group, group = interaction(subject, group))) + geom_line()).
+
+------------------------------------------------------------------------
+
+# Appendix B: Code Appendix
+
+## Airport Data Code
+```{r}
+#| eval: false
+# -----------------------
+# AIRPORT DATA
+# -----------------------
+library(tidyverse)
+library(rvest)
+library(ggplot2)
+
+url <- "https://en.wikipedia.org/wiki/List_of_busiest_airports_by_passenger_traffic"
+
+# More robust table selection: find the table by its caption
+page <- read_html(url)
+table_captions <- page |> html_elements("caption") |> html_text()
+busiest_table_index <- which(str_detect(table_captions, "(?i)busiest airports by passenger traffic"))[1]
+
+# Check if we found a table, else use a fallback (e.g., tables[[1]])
+if (is.na(busiest_table_index)) {
+  warning("Target table not found by caption. Using first table as fallback.")
+  airport_data <- html_table(page)[[1]]
+} else {
+  airport_data <- html_table(page)[[busiest_table_index]]
+}
+
+# Define airports of interest
+airports_of_interest <- c(
+  "Hartsfield–Jackson Atlanta International Airport", # Note: Using en-dash from Wikipedia
+  "Frankfurt Airport",
+  "Beijing Daxing International Airport",
+  "Dubai International Airport",
+  "Los Angeles International Airport",
+  "Heathrow Airport"
+)
+
+# Clean and process data using parse_number for safety
+airport_table <- airport_data |>
+  filter(`Airport` %in% airports_of_interest) |>
+  mutate(
+    # readr::parse_number expertly handles commas, spaces, and text
+    Passengers = parse_number(`Totalpassengers`)
+  ) |>
+  select(Airport, Country, Passengers) |>
+  arrange(desc(Passengers)) # Sort the table for the report
+
+# Prepare data for plotting
+airport_plot_data <- airport_table |>
+  mutate(Airport = fct_reorder(Airport, Passengers)) # Order bars by passenger count
+
+# Create the plot object
+airport_plot <- ggplot(airport_plot_data,
+       aes(x = Airport, y = Passengers, fill = Country)) +
+  geom_col() +
+  coord_flip() + # Flip coordinates for better readability of long airport names
+  labs(
+    title = "Busiest Airports by Passenger Traffic",
+    subtitle = "Comparison of selected global airports",
+    x = NULL, # Remove x-axis label as it's obvious
+    y = "Total Passengers (millions?)", # Suggest adding unit if known
+    fill = "Country"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+## Monte Carlo Code
+```{R}
+
+#| eval: false
+# -----------------------
+# MONTE CARLO SIMULATION
+# -----------------------
+monte_carlo_sim <- function(n, x_min, x_max, y_min, y_max, func) {
+  
+  # generate random x and y values within bounds
+  x_vals <- runif(n, min = x_min, max = x_max)
+  y_vals <- runif(n, min = y_min, max = y_max)
+  
+  # evaluate function at x values
+  f_vals <- func(x_vals)
+  
+  # classify points
+  position <- ifelse(y_vals <= f_vals, "below_or_on", "above")
+  
+  # return data frame
+  data.frame(
+    x = x_vals,
+    y = y_vals,
+    f_x = f_vals,
+    position = position
+  )
+}
+
+set.seed(42) # Set seed for reproducibility
+
+mc_data <- monte_carlo_sim(
+  n = 1000,
+  x_min = 0,
+  x_max = 20,
+  y_min = 0,
+  y_max = 0.16,
+  func = function(x) dchisq(x, df = 3)
+)
+
+# Chi-square pdf function
+chisq_pdf <- function(x, df = 3) {
+  dchisq(x, df = df)
+}
+
+# wrangling and estimation
+mc_results <- mc_data |>
+  mutate(
+    below_curve = ifelse(y <= f_x, 1, 0)
+  )
+
+# proportion under curve
+p <- mean(mc_results$below_curve)
+
+# bounds 
+x_min <- min(mc_results$x)
+x_max <- max(mc_results$x)
+y_min <- min(mc_results$y)
+y_max <- max(mc_results$y)
+
+area_rect <- (x_max - x_min) * (y_max - y_min)
+
+# Monte Carlo estimate of integral
+integral_estimate <- p * area_rect
+
+library(ggplot2)
+
+ggplot(mc_results, aes(x = x, y = y)) +
+  geom_point(aes(color = factor(below_curve)), alpha = 0.5) +
+  stat_function(fun = chisq_pdf, color = "blue", linewidth = 1) +
+  labs(
+    title = "Monte Carlo Integration",
+    subtitle = paste("Estimated Integral =", round(integral_estimate, 4)),
+    x = "x",
+    y = "y",
+    color = "Below Curve"
+  ) +
+  theme_minimal()
+```
