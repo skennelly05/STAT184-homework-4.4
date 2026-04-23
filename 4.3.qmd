@@ -1,7 +1,8 @@
 ---
 title: "Reproducible Data Analysis: Airports, Monte Carlo, and GenAI Planning"
 author: "Sean Kennelly"
-date: "June 12, 2024"
+date: "April 17, 2026"
+modified date: "April 22, 2026"
 
 format:
   pdf:
