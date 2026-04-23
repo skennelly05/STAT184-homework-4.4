@@ -1,4 +1,4 @@
-# STAT184-homework-4.4
+# STAT184-Homework-4.4
 
 ## About This Project
 This project provides contains the files for a reproducible data analysis completed using Quarto and R. The project contains three main analyses: a comparison of the busiest airports in the world, a Monte Carlo integration, and a planning excercise using generative AI. 
